@@ -3,10 +3,10 @@ name: EUROPE TARGET DATE (Austria, France, Netherlands, Sweden, Norway, Finland)
 on:
   schedule:
     - cron: '*/40 * * * *'   # Runs every 40 minutes
-  workflow_dispatch:          # Allows manual trigger with custom target date & days
-  
+  workflow_dispatch:          # One-click manual trigger (auto 3 target days)
+
 concurrency:
-  group: europe-target-${{ github.ref }}-${{ matrix.shard.id }}
+  group: europe-target-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -75,22 +75,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests curl_cffi beautifulsoup4 tabulate python-dateutil pytz cloudscraper urllib3 Pillow numpy
 
-      # 4. Run Target Date Trackers (3 Days - Single Date Execution)
-      - name: Run Shard Trackers (Target Date - 3 Days)
+      # 4. Run Target Date Trackers (Default 3 Consecutive Dates)
+      - name: Run Shard Trackers (3 Target Dates - Single Date Mode)
         run: |
           cd repo_dir
-
-          # Determine start target date (+2 days if empty) and days (default 3)
-          INPUT_DATE="${{ github.event.inputs.target_date }}"
-          INPUT_DAYS="${{ github.event.inputs.days }}"
-          NUM_DAYS=${INPUT_DAYS:-3}
-
-          if [ -n "$INPUT_DATE" ]; then
-            START_DATE="$INPUT_DATE"
-          else
-            START_DATE=$(date -d "+2 days" +"%Y%m%d")
-          fi
-          echo "📅 Processing Target Window: Starting ${START_DATE} for ${NUM_DAYS} day(s)"
 
           SCRIPTS_JSON='${{ toJson(matrix.shard.scripts) }}'
 
@@ -99,16 +87,15 @@ jobs:
           from datetime import datetime, timedelta
 
           scripts = json.loads(sys.stdin.read())
-          raw_start = os.environ.get("START_DATE", "").replace("-", "").strip()
-          num_days = int(os.environ.get("NUM_DAYS", "3"))
 
-          try:
-              start_dt = datetime.strptime(raw_start, "%Y%m%d").date()
-          except Exception:
-              start_dt = datetime.now().date() + timedelta(days=2)
+          # Calculate default 3 target dates (+2, +3, +4 days from today)
+          today = datetime.now().date()
+          target_dates = [(today + timedelta(days=offset)).strftime("%Y%m%d") for offset in [2, 3, 4]]
+          formatted_dates = [(today + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in [2, 3, 4]]
 
-          target_dates = [(start_dt + timedelta(days=i)).strftime("%Y%m%d") for i in range(num_days)]
-          print(f"🎯 Target Dates to Process ({len(target_dates)}): {target_dates}")
+          print("\n" + "=" * 80)
+          print(f"🎯 EUROPE TARGET DATES WINDOW (3 DAYS): {formatted_dates}")
+          print("=" * 80)
 
           for sc in scripts:
               name = sc.get("name", "Unknown")
@@ -127,20 +114,20 @@ jobs:
                       print(f"⚠️ Script for {name} not found, skipping...")
                       continue
 
-              print("\n" + "=" * 80)
-              print(f"🎬 Running {name} ({script_file}) across {len(target_dates)} Target Dates")
-              print("=" * 80)
+              print("\n" + "#" * 80)
+              print(f"🎬 Processing {name} ({script_file}) across 3 Target Dates")
+              print("#" * 80)
 
-              for dt in target_dates:
-                  print(f"\n▶️ [{name}] Executing Single Date: {dt} (Mode: ADVANCE)")
+              for idx, dt in enumerate(target_dates, 1):
+                  print(f"\n🗓️  [{name}] Target Day {idx}/3: {dt} (Mode: ADVANCE)")
                   cmd = [sys.executable, script_file, "--mode", "advance", "--date", dt]
 
                   success = False
                   for attempt in range(1, 4):
-                      print(f"   Attempt {attempt}/3 for date {dt}...")
+                      print(f"   ▶️ Attempt {attempt}/3 for date {dt}...")
                       res = subprocess.run(cmd)
                       if res.returncode == 0:
-                          print(f"   ✅ {name} date {dt} finished successfully.")
+                          print(f"   ✅ [{name}] Date {dt} completed successfully.")
                           success = True
                           break
                       else:
@@ -148,7 +135,7 @@ jobs:
                           time.sleep(8)
 
                   if not success:
-                      print(f"   ⚠️ Warning: {name} failed for date {dt} after 3 attempts.")
+                      print(f"   ⚠️ Warning: [{name}] date {dt} failed after 3 attempts.")
           '
 
       # 5. Commit & Push Data back to thetextuser008/europe
@@ -163,7 +150,7 @@ jobs:
           git rm -rf --cached __pycache__ 2>/dev/null || true
 
           git add data/ || git add . || true
-          git commit -m "target date update [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
+          git commit -m "target update (3 days) [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
 
           # Jitter sleep to avoid simultaneous push contention between shards
           sleep $(( RANDOM % 10 + 2 ))

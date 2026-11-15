@@ -3,8 +3,7 @@ name: EUROPE ADVANCE (Austria, France, Netherlands, Sweden, Norway, Finland)
 on:
   schedule:
     - cron: '*/40 * * * *'   # Runs every 40 minutes
-  workflow_dispatch:          # Allows manual trigger with optional date override
- 
+  workflow_dispatch:          # One-click manual trigger (tomorrow's single date)
 
 concurrency:
   group: europe-advance-${{ github.ref }}
@@ -81,13 +80,8 @@ jobs:
         run: |
           cd repo_dir
 
-          # Determine single advance target date (tomorrow by default or manual input)
-          INPUT_DATE="${{ github.event.inputs.date }}"
-          if [ -n "$INPUT_DATE" ]; then
-            TARGET_DATE="$INPUT_DATE"
-          else
-            TARGET_DATE=$(date -d "+1 day" +"%Y%m%d")
-          fi
+          # Single advance date: Tomorrow (Day +1)
+          TARGET_DATE=$(date -d "+1 day" +"%Y%m%d")
           echo "📅 Processing Single Date [ADVANCE]: ${TARGET_DATE}"
 
           # Parse matrix scripts JSON and run sequentially within this shard
