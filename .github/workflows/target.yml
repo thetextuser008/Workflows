@@ -15,7 +15,7 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
-  scrape-target:QD
+  scrape-target:
     runs-on: ubuntu-latest
     timeout-minutes: 240
 
@@ -202,9 +202,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Remove python cache
+          # Remove python cache & stray unpartitioned directories
           find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
           git rm -rf --cached __pycache__ 2>/dev/null || true
+          rm -rf data/advance data/daily 2>/dev/null || true
+          git rm -rf --cached data/advance data/daily 2>/dev/null || true
 
           git add cached_gas_token_fi.json finland/cached_gas_token_fi.json data/ || git add . || true
           git commit -m "target update (3 days) [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
