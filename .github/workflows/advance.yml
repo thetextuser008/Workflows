@@ -206,3 +206,49 @@ jobs:
             echo "❌ Push failed. Retrying in 5 seconds..."
             sleep 5
           done
+
+  deploy-cloudflare:
+    name: Deploy to Cloudflare Pages
+    needs: scrape-advance
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Latest Target Repo
+        run: |
+          TARGET_REPO="thetextuser008/europe"
+          if git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${TARGET_REPO}.git repo_dir; then
+            echo "✅ Successfully cloned ${TARGET_REPO}"
+          else
+            echo "❌ Failed to clone ${TARGET_REPO}"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Prepare Deployment Directory
+        run: |
+          mkdir -p deploy_dir
+          if [ -d "repo_dir/data" ]; then
+            cp -r repo_dir/data/* deploy_dir/ 2>/dev/null || true
+            mkdir -p deploy_dir/data
+            cp -r repo_dir/data/* deploy_dir/data/ 2>/dev/null || true
+          fi
+          echo "📁 Total files ready for deployment: $(find deploy_dir -type f | wc -l)"
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFALRE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ID }}
+          CLOUDFLARE_PAGES_NAME: ${{ secrets.CLOUDFLARE_PAGES_NAME }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_PAGES_NAME" ]; then
+            echo "⚠️ CLOUDFLARE_API_TOKEN or CLOUDFLARE_PAGES_NAME not found in secrets. Skipping deployment."
+            exit 0
+          fi
+
+          echo "🚀 Deploying to Cloudflare Pages project: ${CLOUDFLARE_PAGES_NAME}"
+          npx wrangler pages project create "${CLOUDFLARE_PAGES_NAME}" --production-branch=main 2>/dev/null || true
+          npx wrangler pages deploy deploy_dir --project-name="${CLOUDFLARE_PAGES_NAME}" --branch=main --commit-dirty=true
