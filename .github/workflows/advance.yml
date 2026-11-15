@@ -4,14 +4,10 @@ on:
   schedule:
     - cron: '*/40 * * * *'   # Runs every 40 minutes
   workflow_dispatch:          # Allows manual trigger with optional date override
-    inputs:
-      date:
-        description: 'Single Advance Date (YYYYMMDD or YYYY-MM-DD, leave empty for tomorrow)'
-        required: false
-        default: ''
+ 
 
 concurrency:
-  group: europe-advance-${{ github.ref }}-${{ matrix.shard.id }}
+  group: europe-advance-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

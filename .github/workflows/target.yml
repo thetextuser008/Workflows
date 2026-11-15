@@ -4,16 +4,7 @@ on:
   schedule:
     - cron: '*/40 * * * *'   # Runs every 40 minutes
   workflow_dispatch:          # Allows manual trigger with custom target date & days
-    inputs:
-      target_date:
-        description: 'Start Target Date (YYYYMMDD or YYYY-MM-DD, defaults to +2 days from today)'
-        required: false
-        default: ''
-      days:
-        description: 'Number of consecutive target dates (default: 3)'
-        required: false
-        default: '3'
-
+  
 concurrency:
   group: europe-target-${{ github.ref }}-${{ matrix.shard.id }}
   cancel-in-progress: true
