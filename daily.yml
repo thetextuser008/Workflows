@@ -1,0 +1,176 @@
+name: EUROPE DAILY (Austria, France, Netherlands, Sweden, Norway, Finland)
+
+on:
+  schedule:
+    - cron: '*/40 * * * *'   # Runs every 40 minutes
+  workflow_dispatch:          # Allows manual trigger with optional date override
+    inputs:
+      date:
+        description: 'Single Target Date (YYYYMMDD or YYYY-MM-DD, leave empty for today)'
+        required: false
+        default: ''
+
+concurrency:
+  group: europe-daily-${{ github.ref }}-${{ matrix.shard.id }}
+  cancel-in-progress: true
+
+jobs:
+  scrape-daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 1
+            name: "Shard 1 (France & Austria)"
+            scripts:
+              - name: "France"
+                primary: "france.py"
+                fallback: "france/france.py"
+              - name: "Austria"
+                primary: "austria.py"
+                fallback: "austria/austria.py"
+          - id: 2
+            name: "Shard 2 (Netherlands & Sweden)"
+            scripts:
+              - name: "Netherlands"
+                primary: "netherlands.py"
+                fallback: "netherlands/netherlands.py"
+              - name: "Sweden"
+                primary: "sweden.py"
+                fallback: "sweden/sweden.py"
+          - id: 3
+            name: "Shard 3 (Norway & Finland)"
+            scripts:
+              - name: "Norway"
+                primary: "normay.py"
+                fallback: "norway.py"
+                alt: "norway/norway.py"
+              - name: "Finland"
+                primary: "finland.py"
+                fallback: "finland/finland.py"
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      # 1. Clone Target Repository
+      - name: Clone Private Target Repo
+        run: |
+          TARGET_REPO="thetextuser008/europe"
+          if git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${TARGET_REPO}.git repo_dir; then
+            echo "✅ Successfully cloned from ${TARGET_REPO}"
+          else
+            echo "❌ Failed to clone ${TARGET_REPO}"
+            exit 1
+          fi
+          echo "TARGET_REPO=${TARGET_REPO}" >> $GITHUB_ENV
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Install Dependencies
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests curl_cffi beautifulsoup4 tabulate python-dateutil pytz cloudscraper urllib3 Pillow numpy
+
+      # 4. Run Daily Trackers for this Shard
+      - name: Run Shard Trackers (Daily Mode - Single Date)
+        run: |
+          cd repo_dir
+
+          # Determine single target date (today by default or manual input)
+          INPUT_DATE="${{ github.event.inputs.date }}"
+          if [ -n "$INPUT_DATE" ]; then
+            TARGET_DATE="$INPUT_DATE"
+          else
+            TARGET_DATE=$(date +"%Y%m%d")
+          fi
+          echo "📅 Processing Single Date [DAILY]: ${TARGET_DATE}"
+
+          # Parse matrix scripts JSON and run sequentially within this shard
+          SCRIPTS_JSON='${{ toJson(matrix.shard.scripts) }}'
+
+          echo "$SCRIPTS_JSON" | python3 -c '
+          import sys, json, os, subprocess, time
+
+          scripts = json.loads(sys.stdin.read())
+          target_date = os.environ.get("TARGET_DATE", "")
+
+          for sc in scripts:
+              name = sc.get("name", "Unknown")
+              script_file = None
+              for key in ["primary", "fallback", "alt"]:
+                  cand = sc.get(key)
+                  if cand and os.path.isfile(cand):
+                      script_file = cand
+                      break
+
+              if not script_file:
+                  # Try finding by name in root or subdirectories
+                  cand_base = f"{name.lower()}.py"
+                  if os.path.isfile(cand_base):
+                      script_file = cand_base
+                  else:
+                      print(f"⚠️ Script for {name} not found, skipping...")
+                      continue
+
+              print("\n" + "=" * 80)
+              print(f"🚀 Running {name} ({script_file}) [Mode: DAILY | Date: {target_date}]")
+              print("=" * 80)
+
+              cmd = [sys.executable, script_file, "--mode", "daily", "--date", target_date]
+              
+              success = False
+              for attempt in range(1, 4):
+                  print(f"▶️ Attempt {attempt}/3...")
+                  res = subprocess.run(cmd)
+                  if res.returncode == 0:
+                      print(f"✅ {name} completed successfully.")
+                      success = True
+                      break
+                  else:
+                      print(f"❌ Attempt {attempt} failed with exit code {res.returncode}. Retrying in 8s...")
+                      time.sleep(8)
+
+              if not success:
+                  print(f"⚠️ Warning: {name} failed after 3 attempts.")
+          '
+
+      # 5. Commit & Push Data back to thetextuser008/europe
+      - name: Commit & Push Scraper Data
+        run: |
+          cd repo_dir
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Remove python cache
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          git rm -rf --cached __pycache__ 2>/dev/null || true
+
+          git add data/ || git add . || true
+          git commit -m "daily update [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
+
+          # Jitter sleep to avoid simultaneous push contention between shards
+          sleep $(( RANDOM % 10 + 2 ))
+
+          for i in {1..8}; do
+            echo "Push attempt $i..."
+            git rebase --abort 2>/dev/null || true
+            git pull --rebase --autostash origin main || true
+            find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+            git rm -rf --cached __pycache__ 2>/dev/null || true
+
+            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${TARGET_REPO}.git main; then
+              echo "✅ Push succeeded to ${TARGET_REPO}"
+              break
+            fi
+            echo "❌ Push failed. Retrying in 5 seconds..."
+            sleep 5
+          done

@@ -1,0 +1,193 @@
+name: EUROPE TARGET DATE (Austria, France, Netherlands, Sweden, Norway, Finland)
+
+on:
+  schedule:
+    - cron: '*/40 * * * *'   # Runs every 40 minutes
+  workflow_dispatch:          # Allows manual trigger with custom target date & days
+    inputs:
+      target_date:
+        description: 'Start Target Date (YYYYMMDD or YYYY-MM-DD, defaults to +2 days from today)'
+        required: false
+        default: ''
+      days:
+        description: 'Number of consecutive target dates (default: 3)'
+        required: false
+        default: '3'
+
+concurrency:
+  group: europe-target-${{ github.ref }}-${{ matrix.shard.id }}
+  cancel-in-progress: true
+
+jobs:
+  scrape-target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 1
+            name: "Shard 1 (France & Austria)"
+            scripts:
+              - name: "France"
+                primary: "france.py"
+                fallback: "france/france.py"
+              - name: "Austria"
+                primary: "austria.py"
+                fallback: "austria/austria.py"
+          - id: 2
+            name: "Shard 2 (Netherlands & Sweden)"
+            scripts:
+              - name: "Netherlands"
+                primary: "netherlands.py"
+                fallback: "netherlands/netherlands.py"
+              - name: "Sweden"
+                primary: "sweden.py"
+                fallback: "sweden/sweden.py"
+          - id: 3
+            name: "Shard 3 (Norway & Finland)"
+            scripts:
+              - name: "Norway"
+                primary: "normay.py"
+                fallback: "norway.py"
+                alt: "norway/norway.py"
+              - name: "Finland"
+                primary: "finland.py"
+                fallback: "finland/finland.py"
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      # 1. Clone Target Repository
+      - name: Clone Private Target Repo
+        run: |
+          TARGET_REPO="thetextuser008/europe"
+          if git clone --depth=1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/${TARGET_REPO}.git repo_dir; then
+            echo "✅ Successfully cloned from ${TARGET_REPO}"
+          else
+            echo "❌ Failed to clone ${TARGET_REPO}"
+            exit 1
+          fi
+          echo "TARGET_REPO=${TARGET_REPO}" >> $GITHUB_ENV
+
+      # 2. Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Install Dependencies
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests curl_cffi beautifulsoup4 tabulate python-dateutil pytz cloudscraper urllib3 Pillow numpy
+
+      # 4. Run Target Date Trackers (3 Days - Single Date Execution)
+      - name: Run Shard Trackers (Target Date - 3 Days)
+        run: |
+          cd repo_dir
+
+          # Determine start target date (+2 days if empty) and days (default 3)
+          INPUT_DATE="${{ github.event.inputs.target_date }}"
+          INPUT_DAYS="${{ github.event.inputs.days }}"
+          NUM_DAYS=${INPUT_DAYS:-3}
+
+          if [ -n "$INPUT_DATE" ]; then
+            START_DATE="$INPUT_DATE"
+          else
+            START_DATE=$(date -d "+2 days" +"%Y%m%d")
+          fi
+          echo "📅 Processing Target Window: Starting ${START_DATE} for ${NUM_DAYS} day(s)"
+
+          SCRIPTS_JSON='${{ toJson(matrix.shard.scripts) }}'
+
+          echo "$SCRIPTS_JSON" | python3 -c '
+          import sys, json, os, subprocess, time
+          from datetime import datetime, timedelta
+
+          scripts = json.loads(sys.stdin.read())
+          raw_start = os.environ.get("START_DATE", "").replace("-", "").strip()
+          num_days = int(os.environ.get("NUM_DAYS", "3"))
+
+          try:
+              start_dt = datetime.strptime(raw_start, "%Y%m%d").date()
+          except Exception:
+              start_dt = datetime.now().date() + timedelta(days=2)
+
+          target_dates = [(start_dt + timedelta(days=i)).strftime("%Y%m%d") for i in range(num_days)]
+          print(f"🎯 Target Dates to Process ({len(target_dates)}): {target_dates}")
+
+          for sc in scripts:
+              name = sc.get("name", "Unknown")
+              script_file = None
+              for key in ["primary", "fallback", "alt"]:
+                  cand = sc.get(key)
+                  if cand and os.path.isfile(cand):
+                      script_file = cand
+                      break
+
+              if not script_file:
+                  cand_base = f"{name.lower()}.py"
+                  if os.path.isfile(cand_base):
+                      script_file = cand_base
+                  else:
+                      print(f"⚠️ Script for {name} not found, skipping...")
+                      continue
+
+              print("\n" + "=" * 80)
+              print(f"🎬 Running {name} ({script_file}) across {len(target_dates)} Target Dates")
+              print("=" * 80)
+
+              for dt in target_dates:
+                  print(f"\n▶️ [{name}] Executing Single Date: {dt} (Mode: ADVANCE)")
+                  cmd = [sys.executable, script_file, "--mode", "advance", "--date", dt]
+
+                  success = False
+                  for attempt in range(1, 4):
+                      print(f"   Attempt {attempt}/3 for date {dt}...")
+                      res = subprocess.run(cmd)
+                      if res.returncode == 0:
+                          print(f"   ✅ {name} date {dt} finished successfully.")
+                          success = True
+                          break
+                      else:
+                          print(f"   ❌ Attempt {attempt} failed (code {res.returncode}). Retrying in 8s...")
+                          time.sleep(8)
+
+                  if not success:
+                      print(f"   ⚠️ Warning: {name} failed for date {dt} after 3 attempts.")
+          '
+
+      # 5. Commit & Push Data back to thetextuser008/europe
+      - name: Commit & Push Scraper Data
+        run: |
+          cd repo_dir
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Remove python cache
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          git rm -rf --cached __pycache__ 2>/dev/null || true
+
+          git add data/ || git add . || true
+          git commit -m "target date update [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
+
+          # Jitter sleep to avoid simultaneous push contention between shards
+          sleep $(( RANDOM % 10 + 2 ))
+
+          for i in {1..8}; do
+            echo "Push attempt $i..."
+            git rebase --abort 2>/dev/null || true
+            git pull --rebase --autostash origin main || true
+            find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+            git rm -rf --cached __pycache__ 2>/dev/null || true
+
+            if git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${TARGET_REPO}.git main; then
+              echo "✅ Push succeeded to ${TARGET_REPO}"
+              break
+            fi
+            echo "❌ Push failed. Retrying in 5 seconds..."
+            sleep 5
+          done
