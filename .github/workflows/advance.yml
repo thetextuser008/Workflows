@@ -75,13 +75,52 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests curl_cffi beautifulsoup4 tabulate python-dateutil pytz cloudscraper urllib3 Pillow numpy
 
-      # 4. Run Advance Trackers for this Shard
+      # 4. Auto-fetch Finnkino Live Token if needed (Shard 3)
+      - name: Auto-fetch Finnkino Live Token (Shard 3)
+        if: matrix.shard.id == 3
+        env:
+          WEBSHARE_PROXY: ${{ secrets.WEBSHARE_PROXY }}
+        run: |
+          cd repo_dir
+          # Check if valid token already exists
+          python3 -c '
+          import os, json, sys, time, base64
+          for p in ["cached_gas_token_fi.json", "finland/cached_gas_token_fi.json"]:
+              if os.path.isfile(p):
+                  try:
+                      with open(p) as f:
+                          d = json.load(f)
+                      tok = d.get("gasToken") or d.get("token")
+                      if tok:
+                          payload = json.loads(base64.b64decode(tok.split(".")[1] + "=="))
+                          if payload.get("exp", 0) > int(time.time()) + 600:
+                              print("✅ Valid cached Finnkino token found.")
+                              sys.exit(0)
+                  except Exception:
+                      pass
+          print("⚠️ No valid cached token found. Fetching fresh token...")
+          sys.exit(1)
+          ' && exit 0 || true
+
+          echo "🚀 Setting up Turnstile solver for Finland..."
+          sudo apt-get update -y && sudo apt-get install -y xvfb libgbm-dev 2>/dev/null || true
+          npm install puppeteer-real-browser 2>/dev/null || true
+
+          if [ -f "get_finnkino_token.js" ]; then
+            xvfb-run --auto-servernum node get_finnkino_token.js || true
+          elif [ -f "mcp-chrome-cloudflare-bypass/finnkino_fetcher.js" ]; then
+            xvfb-run --auto-servernum node mcp-chrome-cloudflare-bypass/finnkino_fetcher.js || true
+          elif [ -f "finland/get_finnkino_token.js" ]; then
+            xvfb-run --auto-servernum node finland/get_finnkino_token.js || true
+          fi
+
+      # 5. Run Advance Trackers for this Shard
       - name: Run Shard Trackers (Advance Mode - Single Date)
         run: |
           cd repo_dir
 
           # Single advance date: Tomorrow (Day +1)
-          TARGET_DATE=$(date -d "+1 day" +"%Y%m%d")
+          export TARGET_DATE=$(date -d "+1 day" +"%Y%m%d")
           echo "📅 Processing Single Date [ADVANCE]: ${TARGET_DATE}"
 
           # Parse matrix scripts JSON and run sequentially within this shard
@@ -89,9 +128,12 @@ jobs:
 
           echo "$SCRIPTS_JSON" | python3 -c '
           import sys, json, os, subprocess, time
+          from datetime import datetime, timedelta
 
           scripts = json.loads(sys.stdin.read())
-          target_date = os.environ.get("TARGET_DATE", "")
+          target_date = os.environ.get("TARGET_DATE", "").strip()
+          if not target_date:
+              target_date = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
 
           for sc in scripts:
               name = sc.get("name", "Unknown")
@@ -144,7 +186,7 @@ jobs:
           find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
           git rm -rf --cached __pycache__ 2>/dev/null || true
 
-          git add data/ || git add . || true
+          git add cached_gas_token_fi.json finland/cached_gas_token_fi.json data/ || git add . || true
           git commit -m "advance update [${{ matrix.shard.name }}] ($(date -u +'%Y-%m-%d %H:%M UTC'))" || echo "No changes to commit"
 
           # Jitter sleep to avoid simultaneous push contention between shards
